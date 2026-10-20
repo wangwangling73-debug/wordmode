@@ -1,0 +1,30 @@
+{
+  "training_updates_completed": 30000,
+  "selected_checkpoint_update": 10000,
+  "selection": "minimum held-out episode EMA validation loss",
+  "selected_val_loss": 0.03932118541220339,
+  "last_val_loss": 0.05245583683736925,
+  "training_device": "NVIDIA GeForce RTX 5060 / CUDA",
+  "torch_version": "2.8.0+cu128",
+  "data_steps": 25650,
+  "data_episodes": 206,
+  "train_windows": 23190,
+  "validation_windows": 2460,
+  "model_parameters": 1878786,
+  "config": {
+    "horizon": 16,
+    "hidden": 64,
+    "seed": 42,
+    "steps": 10000,
+    "version": 3,
+    "schedule": "cosine",
+    "architecture": "unet",
+    "prediction_type": "v_prediction",
+    "diffusion_steps": 100,
+    "val_loss": 0.03932118541220339,
+    "synthetic": false,
+    "batch_size": 128,
+    "learning_rate": 0.0001,
+    "obs_len": 2
+  }
+}

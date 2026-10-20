@@ -1,0 +1,48 @@
+{
+  "checkpoint": "runs_improved_velocity\\policy.pt",
+  "training": {
+    "horizon": 16,
+    "hidden": 256,
+    "seed": 42,
+    "steps": 30000,
+    "version": 3,
+    "schedule": "cosine",
+    "architecture": "residual",
+    "prediction_type": "v_prediction",
+    "diffusion_steps": 100,
+    "val_loss": 0.058810359905890335,
+    "synthetic": false
+  },
+  "mode": "policy",
+  "seed": 10000,
+  "episodes": 10,
+  "max_steps": 300,
+  "action_steps": 8,
+  "sample_steps": 32,
+  "success_rate": 0.0,
+  "max_reward_mean": 0.2963096334057086,
+  "successes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "max_rewards": [
+    0.7687846547685361,
+    0.010140245947033874,
+    0.3998478314761263,
+    0.08974428055614535,
+    0.36660114983927833,
+    0.6916958890420878,
+    0.13450302342916956,
+    0.0,
+    0.08172467844630645,
+    0.42005458055240213
+  ]
+}

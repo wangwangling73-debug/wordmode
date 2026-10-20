@@ -1,0 +1,49 @@
+{
+  "checkpoint": "runs_improved_geometry\\policy.pt",
+  "training": {
+    "horizon": 16,
+    "hidden": 512,
+    "seed": 42,
+    "steps": 28000,
+    "version": 3,
+    "schedule": "cosine",
+    "architecture": "geometric",
+    "prediction_type": "v_prediction",
+    "diffusion_steps": 100,
+    "val_loss": 0.04924667708394004,
+    "synthetic": false
+  },
+  "mode": "policy",
+  "device": "cpu",
+  "seed": 10000,
+  "episodes": 10,
+  "max_steps": 300,
+  "action_steps": 4,
+  "sample_steps": 32,
+  "success_rate": 0.0,
+  "max_reward_mean": 0.6187681932282191,
+  "successes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "max_rewards": [
+    0.9279588828667436,
+    0.7165437812330692,
+    0.3895035491854545,
+    0.08974428055614535,
+    0.8845604551398063,
+    0.6873820287590134,
+    0.3731762898847135,
+    0.979643335606828,
+    0.7300355239681215,
+    0.40913380508229596
+  ]
+}

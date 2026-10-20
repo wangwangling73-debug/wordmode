@@ -1,0 +1,52 @@
+{
+  "checkpoint": "runs_improved_unet\\policy.pt",
+  "training": {
+    "horizon": 16,
+    "hidden": 64,
+    "seed": 42,
+    "steps": 9000,
+    "version": 3,
+    "schedule": "cosine",
+    "architecture": "unet",
+    "prediction_type": "v_prediction",
+    "diffusion_steps": 100,
+    "val_loss": 0.039506134996569256,
+    "synthetic": false,
+    "batch_size": 128,
+    "learning_rate": 0.0001,
+    "obs_len": 2
+  },
+  "mode": "policy",
+  "device": "cpu",
+  "seed": 10000,
+  "episodes": 10,
+  "max_steps": 300,
+  "action_steps": 4,
+  "sample_steps": 32,
+  "success_rate": 0.4,
+  "max_reward_mean": 0.9541162278882677,
+  "successes": [
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1
+  ],
+  "max_rewards": [
+    1.0,
+    1.0,
+    0.9819586580646532,
+    0.710272146253119,
+    0.9661008757567381,
+    0.989376754519886,
+    0.9061794501799374,
+    1.0,
+    0.9872743941083444,
+    1.0
+  ]
+}

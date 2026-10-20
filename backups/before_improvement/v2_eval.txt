@@ -1,0 +1,12 @@
+episode 1/10: success=False, max_reward=0.667
+episode 2/10: success=False, max_reward=0.000
+episode 3/10: success=False, max_reward=0.000
+episode 4/10: success=False, max_reward=0.090
+episode 5/10: success=False, max_reward=0.005
+episode 6/10: success=False, max_reward=0.427
+episode 7/10: success=False, max_reward=0.000
+episode 8/10: success=False, max_reward=0.000
+episode 9/10: success=False, max_reward=0.035
+episode 10/10: success=False, max_reward=0.409
+RESULT mode=policy: success_rate=0.000, max_reward_mean=0.163, n=10
+WARNING: these are local results of a light-weight implementation, NOT paper benchmark scores.

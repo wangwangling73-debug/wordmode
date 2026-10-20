@@ -1,0 +1,48 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# Credentials and machine-local settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.codex/
+.agents/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Downloadable datasets and temporary downloads
+/data/
+/pip_temp/
+
+# Keep the default checkpoints; omit duplicate experimental runs
+/runs_*/
+!/runs_improved/
+!/runs_v2/
+/runs_improved/*
+!/runs_improved/policy.pt
+!/runs_improved/policy_last.pt
+!/runs_improved/training_summary.json
+/runs_v2/*
+!/runs_v2/policy.pt
+/runs/*
+!/runs/policy.pt
+
+# Synthetic debugging artifacts
+/outputs/test_checkpoints/
+
+# Paper downloads, renders, and unfinished reading drafts
+/paper_readings/
+
+# Generic temporary files
+*.tmp
+*.log
