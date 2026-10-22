@@ -1,10 +1,12 @@
 # PushT：训练与推理修正版
 
+文件用途与目录关系见 [PROJECT_GUIDE.md](PROJECT_GUIDE.md)。
+
 入口仍是 `wm_pusht8g.py` 和 `visualize_pusht.py`。使用真实 PushT 专家示范训练状态输入的轻量扩散策略；不是图像策略，也不是论文官方复现。
 
 ## 下载仓库后运行
 
-仓库包含代码、默认改进模型 `runs_improved/policy.pt`、最终训练权重、旧模型对照、评估记录和示例动画。训练数据、重复实验权重、缓存和论文阅读临时文件不纳入版本管理，本地文件仍保留。
+仓库包含代码、默认改进模型 `runs_improved/policy.pt`、最终训练权重、旧模型对照、评估记录和示例动画，以及 `runs_world/` 与 `runs_world_manual/` 两组世界模型权重、训练日志和摘要。训练数据、重复实验权重、缓存和论文阅读临时文件不纳入版本管理，本地文件仍保留。
 
 先创建 Python 环境，安装适合自己硬件的 PyTorch，再安装项目依赖：
 
@@ -72,23 +74,50 @@ python backups/before_improvement/wm_pusht8g.py eval --device cpu --mode policy 
 python wm_pusht8g.py eval --device cuda --checkpoint runs/policy.pt --sample-steps 32 --action-steps 4
 ```
 
-## 世界模型（可选实验）
+## 世界模型辅助（新版）
 
-先验证 `policy` 模式。单步世界模型的多步误差可能使候选选择变差，不能保证 `world` 比 `policy` 好。
+现在的世界模型使用最近 4 帧状态和已执行的 3 个动作，预测接下来 4 步。3 个独立初始化、分别按回合重采样训练的预测器组成集成。训练时连续使用模型自己的预测作为下一步输入，避免只学会单步预测、部署时却要求连续预测的问题。
+
+控制流程是：原策略提出动作 → 再生成候选 → 世界模型模拟短期结果 → 按 T 形覆盖率、目标位置和角度、动作平滑度以及预测分歧评分 → 执行前 4 步 → 用真实观测重新规划。覆盖率按环境中的 T 形多边形交叠面积计算。预测器分歧较大、候选偏离训练数据，或相对原动作的改善不够明显时，保留原策略动作。可靠性阈值来自完整验证集的 95% 分位数，是筛选启发式，不能保证预测正确或成功率提升。
+
+本次训练、对照结果和局限见 [WORLD_MODEL_RESULTS.md](WORLD_MODEL_RESULTS.md)。原策略权重无需重新训练。
 
 ```powershell
-python wm_pusht8g.py train-world --device cuda --steps 10000 --batch-size 128
-python wm_pusht8g.py eval --device cuda --mode world --episodes 50 --seed 20000
+conda activate wm8g
+python wm_pusht8g.py train-world --device cuda --steps 4000 --batch-size 256 --hidden 128 --lr 0.0003 --world-history 4 --world-horizon 4 --world-members 3 --out-dir runs_world
+python wm_pusht8g.py eval --device cpu --mode policy --episodes 20 --seed 50000 --report outputs/policy_compare.json
+python wm_pusht8g.py eval --device cpu --mode world --world-checkpoint runs_world/world.pt --episodes 20 --seed 50000 --report outputs/world_compare.json
+python visualize_pusht.py --mode world --device cpu --world-checkpoint runs_world/world.pt --seed 42 --steps 300
 ```
 
-世界模型默认保存在 `runs_improved/world.pt`。若在其他位置，评估或动画中传入 `--world-checkpoint 路径`。`sample4` 仍是生成多个候选只执行第一个的采样批量对照，不进行择优。
+如果希望手动训练更久并保留本次结果，可以运行：
+
+```powershell
+python wm_pusht8g.py train-world --device cuda --steps 10000 --batch-size 256 --lr 0.0003 --out-dir runs_world_manual
+python wm_pusht8g.py eval --device cpu --mode world --world-checkpoint runs_world_manual/world.pt --episodes 20 --seed 60000 --report outputs/manual_world20.json
+python wm_pusht8g.py eval --device cpu --mode policy --episodes 20 --seed 60000 --report outputs/manual_policy20.json
+```
+
+训练次数增加不保证控制效果提高；请比较相同种子下的成功率。如果将某组种子用于调整参数，最终汇报时再使用未参与调整的新种子。
+
+`runs_world/world.pt` 保存完整验证集上表现最好的世界模型，`world_last.pt` 保存最后一次；`world_summary.json` 记录逐步预测误差、数据划分和筛选阈值。每次训练从头开始，请用不同输出目录保留不同实验。`runs_world/` 和 `runs_world_manual/` 的权重、训练日志与摘要已纳入版本管理，克隆后可直接加载。前者为 4,000 次更新的已评估实验；后者为手动训练 20,000 次更新、学习率 0.0004 的实验，目前没有对应的独立成功率报告。旧单步世界模型仍可加载，但没有新版可靠性检查，会显示提示。
+
+- `--candidates 4`：候选数，含原策略动作。
+- `--action-steps 4`：连续执行步数。
+- `--plan-steps 4`：预测评分步数，默认与执行步数相同；必须满足执行步数 ≤ 预测步数 ≤ 世界模型训练跨度，且不能超出策略输出长度。
+- `--uncertainty-weight 0.15`：评分中对预测器分歧的惩罚。
+- `--switch-margin 0.02`：候选评分至少优于原动作多少才允许替换，分数越小越好。
+
+`sample4` 生成候选但只执行第一个，适合核对采样对照。新版第一个候选单独生成，额外候选不会消耗原策略的随机数流；在相同设备、种子和观测下，回退动作与 `policy` 模式相同。该行为与旧版批量采样不同。评估 JSON 同时记录成功率、最终覆盖率、每步控制耗时、动作替换次数与回退原因。
+
+模型当前只用演示数据训练。失败或偏离演示轨迹后的状态可能预测不准；若对照没有稳定提高成功率，后续应优先补充策略实际运行产生的转移数据，再重新验证，而非仅提高候选数或延长预测。
 
 ## 环境和检查
 
 本机已有环境 `E:\Condaenv\wm8g`。依赖见 `requirements.txt`；PyTorch 单独安装。RTX 5060 使用支持其架构的 CUDA 构建，本次实测环境是 PyTorch 2.8.0+cu128。
 
 ```powershell
-python -m unittest test_pusht -v
+python -m unittest test_pusht test_world -v
 python wm_pusht8g.py train-policy --device cpu --steps 2 --hidden 32 --batch-size 512 --synthetic --out-dir outputs/test_checkpoints
 ```
 

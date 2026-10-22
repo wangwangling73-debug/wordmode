@@ -1,0 +1,17 @@
+{
+  "moving_definition": "T translation >2 px OR rotation >2 degrees over four steps",
+  "windows": 2376,
+  "moving_windows": 1142,
+  "all_windows": {
+    "world_position": 4.12719808612646,
+    "world_angle": 2.4574629478470142,
+    "static_position": 6.5632501270857,
+    "static_angle": 3.7428894419033356
+  },
+  "moving_windows_only": {
+    "world_position": 5.527328886802842,
+    "world_angle": 2.8936282977618393,
+    "static_position": 13.578432544663013,
+    "static_angle": 7.7274744714399874
+  }
+}

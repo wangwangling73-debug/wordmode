@@ -1,0 +1,19 @@
+{
+  "development": {
+    "policy_success": 4,
+    "world_success": 2,
+    "episodes": 10
+  },
+  "heldout": {
+    "policy_success": 8,
+    "world_success": 5,
+    "episodes": 20,
+    "paired": {
+      "both_success": 2,
+      "policy_only_success": 6,
+      "world_only_success": 3,
+      "both_failure": 9
+    }
+  },
+  "conclusion": "World assistance did not improve success in this experiment; keep policy as default."
+}

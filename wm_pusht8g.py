@@ -10,6 +10,8 @@ import json
 import math
 from pathlib import Path
 import random
+import time
+from collections import Counter
 import urllib.request
 import zipfile
 
@@ -18,6 +20,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
+
+from pusht_world import WorldEnsemble, train_ensemble, load_ensemble, history_tensors, rank_candidates
 
 DATA_URL = "https://diffusion-policy.cs.columbia.edu/data/training/pusht.zip"
 BASE_DIR = Path(__file__).resolve().parent
@@ -423,35 +427,7 @@ def train_policy(args):
 
 def train_world(args):
     states, actions, ends = load_arrays(args.synthetic)
-    tr = TransitionDataset(states, actions, ends, "train", seed=args.seed)
-    va = TransitionDataset(states, actions, ends, "val", seed=args.seed)
-    loader = DataLoader(tr, batch_size=args.batch_size, shuffle=True, num_workers=0)
-    vloader = DataLoader(va, batch_size=args.batch_size, shuffle=False, num_workers=0)
-    dev = device_of(args.device)
-    model = WorldMLP(hidden=args.hidden).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    it = iter(loader)
-    for step in range(1, args.steps + 1):
-        try:
-            s, a, sp = next(it)
-        except StopIteration:
-            it = iter(loader)
-            s, a, sp = next(it)
-        s, a, sp = s.to(dev), a.to(dev), sp.to(dev)
-        opt.zero_grad(set_to_none=True)
-        loss = F.mse_loss(model(s, a), sp)
-        loss.backward()
-        opt.step()
-        if step == 1 or step % args.log_every == 0 or step == args.steps:
-            with torch.no_grad():
-                vs, vact, vsp = next(iter(vloader))
-                val_loss = F.mse_loss(model(vs.to(dev), vact.to(dev)), vsp.to(dev)).item()
-            print(f"world  step={step:6d} train_loss={loss.item():.6f} val_loss={val_loss:.6f}", flush=True)
-    OUT_DIR.mkdir(exist_ok=True)
-    path = OUT_DIR / "world.pt"
-    torch.save({"model": model.cpu().state_dict(), "hidden": args.hidden,
-                "seed": args.seed, "steps": args.steps}, path)
-    print("Saved", path)
+    train_ensemble(args, states, actions, ends, OUT_DIR, device_of(args.device))
 
 
 def save_checkpoint(checkpoint, path):
@@ -483,7 +459,11 @@ def load_policy(dev, path=None):
 def load_world(dev, path=None):
     path = Path(path) if path else OUT_DIR / "world.pt"
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
+    if ckpt.get("world_version", 1) == 2:
+        return load_ensemble(ckpt, dev)
+    print("Legacy one-step world checkpoint: no uncertainty guard; retrain for history ensemble.")
     model = WorldMLP(hidden=ckpt["hidden"]).to(dev)
+    model.checkpoint_metadata = {k: v for k, v in ckpt.items() if k != "model"}
     model.load_state_dict(ckpt["model"])
     return model.eval()
 
@@ -496,23 +476,45 @@ def cost_from_pred(sn):
 
 
 @torch.no_grad()
-def select_chunk(policy, world, history, mode, candidates, sample_steps, action_steps=4):
+def select_chunk(policy, world, history, mode, candidates, sample_steps, action_steps=4,
+                 executed_actions=None, plan_steps=None, uncertainty_weight=.15,
+                 switch_margin=.02, diagnostics=None):
     dev = next(policy.parameters()).device
-    hist = torch.from_numpy(norm_s(np.stack(history)[None]).astype(np.float32)).to(dev)
+    observations = list(history[-policy.obs_len:])
+    observations = [observations[0]] * (policy.obs_len-len(observations)) + observations
+    hist = torch.from_numpy(norm_s(np.stack(observations)[None]).astype(np.float32)).to(dev)
+    # Candidate zero and its RNG consumption exactly match the policy-only path.
+    first = policy.sample(hist, sample_steps)
     if mode == "policy":
-        actions = policy.sample(hist, sample_steps)[0]
-        return denorm_a(actions).cpu().numpy()
-    opts = policy.sample(hist.repeat(candidates, 1, 1), sample_steps)
+        return denorm_a(first[0]).cpu().numpy()
+    if mode not in ("world", "sample4"):
+        raise ValueError(f"Unknown controller mode: {mode}")
+    opts = first
+    if candidates > 1:
+        devices = [dev.index if dev.index is not None else torch.cuda.current_device()] if dev.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            extra = policy.sample(hist.repeat(candidates-1, 1, 1), sample_steps)
+        opts = torch.cat((first, extra), 0)
     if mode == "sample4":
         return denorm_a(opts[0]).cpu().numpy()
     if world is None:
         raise RuntimeError("world mode requires a trained world.pt")
-    current = hist[:, -1].repeat(candidates, 1)
-    # One-step dynamics rolled out over a few candidate actions.
-    for i in range(min(action_steps, opts.shape[1])):
-        current = world(current, opts[:, i])
-    scores = cost_from_pred(current)
-    best = int(torch.argmin(scores).item())
+    plan_steps = action_steps if plan_steps is None else plan_steps
+    if isinstance(world, WorldEnsemble):
+        wh, wa = history_tensors(history, executed_actions or [], world.history_len, dev)
+        best, info = rank_candidates(world, wh, wa, opts, plan_steps,
+                                    executed_actions[-1] if executed_actions else None,
+                                    uncertainty_weight, switch_margin)
+    else:
+        current = hist[:, -1].repeat(candidates, 1)
+        for i in range(plan_steps):
+            current = world(current, opts[:, i])
+        scores = cost_from_pred(current)
+        scores[~torch.isfinite(scores)] = float("inf")
+        best = int(scores.argmin())
+        info = {"selected": best, "reason": "legacy_unchecked"}
+    if diagnostics is not None:
+        diagnostics.update(info)
     return denorm_a(opts[best]).cpu().numpy()
 
 
@@ -521,30 +523,51 @@ def select_action(policy, world, history, mode, candidates, sample_steps):
 
 
 class ChunkController:
-    """Shared deployment path for evaluation and visualization; reset each episode."""
+    """Evaluation and visualization share executed-action history and reset semantics."""
     def __init__(self, policy, world=None, mode="policy", candidates=4,
-                 sample_steps=32, action_steps=4):
+                 sample_steps=32, action_steps=4, plan_steps=None,
+                 uncertainty_weight=.15, switch_margin=.02):
         if not 1 <= action_steps <= policy.horizon:
             raise ValueError(f"action_steps must be between 1 and horizon={policy.horizon}")
         if candidates < 1 or not 2 <= sample_steps <= policy.steps:
             raise ValueError(f"candidates must be positive; sample_steps must be 2..{policy.steps}")
+        if mode not in ("policy", "sample4", "world"):
+            raise ValueError("Unknown controller mode")
+        if mode == "world" and world is None:
+            raise ValueError("world mode requires a world checkpoint")
+        plan_steps = action_steps if plan_steps is None else plan_steps
+        limit = min(policy.horizon, world.horizon) if isinstance(world, WorldEnsemble) else policy.horizon
+        if not action_steps <= plan_steps <= limit:
+            raise ValueError(f"Require action_steps <= plan_steps <= trained horizon ({limit})")
+        if not all(math.isfinite(x) and x >= 0 for x in (uncertainty_weight, switch_margin)):
+            raise ValueError("Uncertainty weight and switch margin must be finite and nonnegative")
         self.policy, self.world, self.mode = policy, world, mode
         self.candidates, self.sample_steps, self.action_steps = candidates, sample_steps, action_steps
+        self.plan_steps, self.uncertainty_weight, self.switch_margin = plan_steps, uncertainty_weight, switch_margin
+        self.history_len = max(policy.obs_len, getattr(world, "history_len", 0))
         self.reset()
 
     def reset(self):
-        self.history, self.pending = [], []
+        self.history, self.pending, self.executed_actions = [], [], []
+        self.last_action = None
+        self.decisions = []
 
     def act(self, state):
         state = np.asarray(state, dtype=np.float32).copy()
-        self.history = (self.history + [state])[-self.policy.obs_len:]
-        while len(self.history) < self.policy.obs_len:
-            self.history.insert(0, state.copy())
+        if self.last_action is not None:
+            self.executed_actions = (self.executed_actions + [self.last_action.copy()])[-(self.history_len-1):]
+        self.history = (self.history + [state])[-self.history_len:]
         if not self.pending:
+            info = {}
             chunk = select_chunk(self.policy, self.world, self.history, self.mode,
-                                 self.candidates, self.sample_steps, self.action_steps)
+                                 self.candidates, self.sample_steps, self.action_steps,
+                                 executed_actions=self.executed_actions, plan_steps=self.plan_steps,
+                                 uncertainty_weight=self.uncertainty_weight, switch_margin=self.switch_margin,
+                                 diagnostics=info)
+            self.decisions.append(info)
             self.pending = list(np.clip(chunk[:self.action_steps], 0, 512).astype(np.float32))
-        return self.pending.pop(0)
+        self.last_action = self.pending.pop(0).copy()
+        return self.last_action.copy()
 
 
 def evaluate(args):
@@ -553,8 +576,9 @@ def evaluate(args):
     dev = device_of(args.device)
     policy = load_policy(dev, args.checkpoint)
     world = load_world(dev, args.world_checkpoint) if args.mode == "world" else None
-    controller = ChunkController(policy, world, args.mode, args.candidates, args.sample_steps, args.action_steps)
-    rewards, successes = [], []
+    controller = ChunkController(policy, world, args.mode, args.candidates, args.sample_steps, args.action_steps,
+                                 args.plan_steps, args.uncertainty_weight, args.switch_margin)
+    rewards, successes, coverages, timings, lengths, decisions = [], [], [], [], [], []
     with gym.make("gym_pusht/PushT-v0", obs_type="state", render_mode="rgb_array",
                   max_episode_steps=args.max_steps) as env:
         for ep in range(args.episodes):
@@ -564,12 +588,17 @@ def evaluate(args):
             best_reward = 0.0
             success = False
             for step in range(args.max_steps):
+                started = time.perf_counter()
                 act = controller.act(state)
+                timings.append(time.perf_counter()-started)
                 state, reward, terminated, truncated, info = env.step(act)
                 best_reward = max(best_reward, float(reward))
                 success = success or bool(info.get("is_success", terminated))
                 if terminated or truncated:
                     break
+            coverages.append(float(info["coverage"]))
+            lengths.append(step+1)
+            decisions.extend(controller.decisions)
             rewards.append(best_reward)
             successes.append(int(success))
             print(f"episode {ep+1}/{args.episodes}: success={success}, max_reward={best_reward:.3f}", flush=True)
@@ -584,7 +613,18 @@ def evaluate(args):
             "max_steps": args.max_steps, "action_steps": args.action_steps,
             "sample_steps": args.sample_steps, "success_rate": float(np.mean(successes)),
             "max_reward_mean": float(np.mean(rewards)), "successes": successes,
-            "max_rewards": rewards}, indent=2), encoding="utf-8")
+            "max_rewards": rewards, "final_coverages": coverages, "episode_lengths": lengths,
+            "final_coverage_mean": float(np.mean(coverages)),
+            "controller_ms_per_action": float(np.mean(timings)*1000),
+            "controller_ms_p95": float(np.quantile(timings, .95)*1000),
+            "candidates": args.candidates, "plan_steps": controller.plan_steps,
+            "uncertainty_weight": args.uncertainty_weight, "switch_margin": args.switch_margin,
+            "world_checkpoint": str(args.world_checkpoint or OUT_DIR / "world.pt") if world else None,
+            "world_training": getattr(world, "checkpoint_metadata", None),
+            "planning_decisions": len(decisions),
+            "changed_decisions": sum(d.get("selected", 0) != 0 for d in decisions),
+            "decision_reasons": dict(Counter(d.get("reason", "policy") for d in decisions)),
+            "decisions": decisions}, indent=2), encoding="utf-8")
 
 
 def smoke(args):
@@ -628,6 +668,10 @@ def main():
             if c == "train-policy":
                 q.add_argument("--horizon", type=int, default=16)
                 q.add_argument("--architecture", choices=["unet", "geometric"], default="unet")
+            else:
+                q.add_argument("--world-history", type=int, default=4)
+                q.add_argument("--world-horizon", type=int, default=4)
+                q.add_argument("--world-members", type=int, default=3)
         if c == "eval":
             q.add_argument("--mode", choices=["policy", "sample4", "world"], default="policy")
             q.add_argument("--episodes", type=int, default=5)
@@ -637,13 +681,18 @@ def main():
             q.add_argument("--action-steps", type=int, default=4)
             q.add_argument("--checkpoint", type=Path)
             q.add_argument("--world-checkpoint", type=Path)
+            q.add_argument("--plan-steps", type=int, default=None)
+            q.add_argument("--uncertainty-weight", type=float, default=.15)
+            q.add_argument("--switch-margin", type=float, default=.02)
             q.add_argument("--report", type=Path)
     args = p.parse_args()
     for name in ("steps", "batch_size", "hidden", "log_every", "horizon", "episodes", "max_steps", "candidates", "action_steps", "cpu_threads"):
         if hasattr(args, name) and getattr(args, name) < 1:
             p.error(f"--{name.replace('_', '-')} must be positive")
-    if hasattr(args, "lr") and args.lr <= 0:
+    if hasattr(args, "lr") and (not math.isfinite(args.lr) or args.lr <= 0):
         p.error("--lr must be positive")
+    if args.command == "train-world" and (args.world_history < 2 or args.world_horizon < 1 or args.world_members < 2):
+        p.error("World training requires --world-history >= 2, --world-horizon >= 1, --world-members >= 2")
     if hasattr(args, "out_dir"):
         OUT_DIR = args.out_dir
         if getattr(args, "synthetic", False):

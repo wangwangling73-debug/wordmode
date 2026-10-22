@@ -41,7 +41,8 @@ def run(args):
         if args.mode == "world":
             world = load_world(dev, args.world_checkpoint)
         controller = ChunkController(policy, world, args.mode, args.candidates,
-                                     args.sample_steps, args.action_steps)
+                                     args.sample_steps, args.action_steps, args.plan_steps,
+                                     args.uncertainty_weight, args.switch_margin)
 
     seed_all(args.seed)
     env.action_space.seed(args.seed)
@@ -62,7 +63,7 @@ def run(args):
                 action = controller.act(obs)
             obs, reward, terminated, truncated, info = env.step(action)
             best_reward = max(best_reward, float(reward))
-            success = success or bool(terminated)
+            success = success or bool(info.get("is_success", terminated))
             steps = t + 1
             if recording and (steps % args.stride == 0 or terminated or truncated or steps == args.steps):
                 frames.append(np.asarray(env.render(), dtype=np.uint8).copy())
@@ -99,6 +100,9 @@ def main():
     p.add_argument("--action-steps", type=int, default=4)
     p.add_argument("--checkpoint", type=Path)
     p.add_argument("--world-checkpoint", type=Path)
+    p.add_argument("--plan-steps", type=int)
+    p.add_argument("--uncertainty-weight", type=float, default=.15)
+    p.add_argument("--switch-margin", type=float, default=.02)
     p.add_argument("--record", type=str, default=None, metavar="FILE.gif",
                    help="Save GIF instead of opening live simulation window")
     args = p.parse_args()

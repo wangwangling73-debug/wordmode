@@ -37,6 +37,20 @@ Thumbs.db
 /runs/*
 !/runs/policy.pt
 
+# Published world-model experiments: weights, metrics, and summaries
+!/runs_world/
+/runs_world/*
+!/runs_world/world.pt
+!/runs_world/world_last.pt
+!/runs_world/world_metrics.jsonl
+!/runs_world/world_summary.json
+!/runs_world_manual/
+/runs_world_manual/*
+!/runs_world_manual/world.pt
+!/runs_world_manual/world_last.pt
+!/runs_world_manual/world_metrics.jsonl
+!/runs_world_manual/world_summary.json
+
 # Synthetic debugging artifacts
 /outputs/test_checkpoints/
 
